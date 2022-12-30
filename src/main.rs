@@ -63,16 +63,38 @@ impl LineBuffer {
         self.buffer.pop()
     }
 
-    pub fn calcuate_word_left(&mut self) -> Option<(usize, &str)> {
-        self.buffer
+    pub fn move_word_left(&mut self) -> usize {
+        match self
+            .buffer
             .rmatch_indices(&[' ', '\t'][..])
             .find(|(index, _)| index < &(self.insertion_point - 1))
+        {
+            Some((index, _)) => {
+                self.insertion_point = index;
+                index
+            }
+            None => {
+                self.insertion_point = 0;
+                0
+            }
+        }
     }
 
-    pub fn calcuate_word_right(&mut self) -> Option<(usize, &str)> {
-        self.buffer
+    pub fn move_word_right(&mut self) -> usize {
+        match self
+            .buffer
             .match_indices(&[' ', '\t'][..])
             .find(|(index, _)| index > &self.insertion_point)
+        {
+            Some((index, _)) => {
+                self.insertion_point = index + 1;
+                index
+            }
+            None => {
+                self.insertion_point = self.get_buffer_length() - 1;
+                self.get_insertion_point()
+            }
+        }
     }
 
     pub fn clear(&mut self) {
@@ -103,7 +125,7 @@ fn main() -> Result<()> {
             .execute(Print("> "))?
             .execute(ResetColor)?;
 
-        let (input_start_col, _) = position()?;
+        let (prompt_offset, _) = position()?;
 
         'input: loop {
             match read()? {
@@ -119,7 +141,7 @@ fn main() -> Result<()> {
                         stdout
                             .queue(Print(c))?
                             .queue(Print(buffer.slice_buffer(insertion_point)))?
-                            .queue(MoveToColumn(insertion_point as u16 + input_start_col + 1))?;
+                            .queue(MoveToColumn(insertion_point as u16 + prompt_offset + 1))?;
                         stdout.flush()?;
                         buffer.increment_insertion_point();
                         buffer.insert_char(insertion_point, c);
@@ -140,7 +162,7 @@ fn main() -> Result<()> {
                                 .queue(Print(buffer.slice_buffer(insertion_point - 1)))?
                                 .queue(Print(" "))?
                                 .queue(MoveToColumn(
-                                    buffer.get_insertion_point() as u16 + input_start_col - 1,
+                                    buffer.get_insertion_point() as u16 + prompt_offset - 1,
                                 ))?;
                         }
                         stdout.flush()?;
@@ -162,19 +184,10 @@ fn main() -> Result<()> {
                     KeyCode::Left => {
                         if buffer.get_insertion_point() > 0 {
                             if modifiers == KeyModifiers::ALT {
-                                let whitespace_index = buffer.calcuate_word_left();
-                                match whitespace_index {
-                                    Some((index, _)) => {
-                                        stdout.queue(MoveToColumn(
-                                            index as u16 + input_start_col + 1,
-                                        ))?;
-                                        buffer.set_insertion_point(index + 1);
-                                    }
-                                    None => {
-                                        stdout.queue(MoveToColumn(input_start_col))?;
-                                        buffer.set_insertion_point(0);
-                                    }
-                                }
+                                let new_insertion_point = buffer.move_word_left();
+                                stdout.queue(MoveToColumn(
+                                    new_insertion_point as u16 + prompt_offset,
+                                ))?;
                             } else {
                                 stdout.execute(MoveLeft(1))?;
                                 buffer.decrement_insertion_point();
@@ -185,19 +198,10 @@ fn main() -> Result<()> {
                     KeyCode::Right => {
                         if buffer.get_insertion_point() < buffer.get_buffer_length() {
                             if modifiers == KeyModifiers::ALT {
-                                let whitespace_index = buffer.calcuate_word_right();
-                                match whitespace_index {
-                                    Some((index, _)) => {
-                                        stdout.queue(MoveToColumn(index as u16 + 1))?;
-                                        buffer.set_insertion_point(index + 1);
-                                    }
-                                    None => {
-                                        stdout.queue(MoveToColumn(
-                                            buffer.get_buffer_length() as u16
-                                        ))?;
-                                        buffer.set_insertion_point(buffer.get_buffer_length());
-                                    }
-                                }
+                                let new_insertion_point = buffer.move_word_right();
+                                stdout.queue(MoveToColumn(
+                                    new_insertion_point as u16 + prompt_offset + 1,
+                                ))?;
                             } else {
                                 stdout.execute(MoveRight(1))?;
                                 buffer.increment_insertion_point();
