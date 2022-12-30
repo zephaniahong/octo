@@ -2,8 +2,7 @@ use crossterm::{
     cursor::{position, MoveLeft, MoveRight, MoveToColumn, MoveToNextLine},
     event::{read, Event, KeyCode, KeyEvent, KeyModifiers},
     style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{self},
-    ExecutableCommand, QueueableCommand, Result,
+    terminal, ExecutableCommand, QueueableCommand, Result,
 };
 use std::io::{stdout, Stdout, Write};
 
@@ -20,11 +19,11 @@ impl LineBuffer {
         }
     }
 
-    pub fn set_caret_pos(&mut self, pos: u16) {
+    pub fn set_insertion_point(&mut self, pos: usize) {
         self.insertion_point = pos;
     }
 
-    pub fn get_caret_pos(&self) -> u16 {
+    pub fn get_insertion_point(&self) -> usize {
         self.insertion_point
     }
 
@@ -40,12 +39,12 @@ impl LineBuffer {
         &self.buffer[pos..]
     }
 
-    pub fn increment_caret_pos(&mut self) {
+    pub fn increment_insertion_point(&mut self) {
         self.insertion_point += 1;
     }
 
-    pub fn decrement_caret_pos(&mut self) {
-        self.insertion_point += 1;
+    pub fn decrement_insertion_point(&mut self) {
+        self.insertion_point = self.insertion_point.saturating_sub(1);
     }
 
     pub fn insert_char(&mut self, pos: usize, c: char) {
@@ -64,16 +63,16 @@ impl LineBuffer {
         self.buffer.pop()
     }
 
-    pub fn calcuate_word_left(&mut self, input_start_col: u16) -> Option<(usize, &str)> {
+    pub fn calcuate_word_left(&mut self) -> Option<(usize, &str)> {
         self.buffer
             .rmatch_indices(&[' ', '\t'][..])
-            .find(|(index, _)| index < &(self.insertion_point as usize - input_start_col as usize))
+            .find(|(index, _)| index < &(self.insertion_point - 1))
     }
 
-    pub fn calcuate_word_right(&mut self, input_start_col: u16) -> Option<(usize, &str)> {
+    pub fn calcuate_word_right(&mut self) -> Option<(usize, &str)> {
         self.buffer
             .match_indices(&[' ', '\t'][..])
-            .find(|(index, _)| index < &(self.insertion_point as usize - input_start_col as usize))
+            .find(|(index, _)| index > &self.insertion_point)
     }
 
     pub fn clear(&mut self) {
@@ -105,7 +104,6 @@ fn main() -> Result<()> {
             .execute(ResetColor)?;
 
         let (input_start_col, _) = position()?;
-        buffer.set_caret_pos(input_start_col);
 
         'input: loop {
             match read()? {
@@ -114,23 +112,20 @@ fn main() -> Result<()> {
                 }) => match code {
                     KeyCode::Char(c) => {
                         if modifiers == KeyModifiers::CONTROL && (c == 'd' || c == 'c') {
-                            stdout
-                                .queue(MoveToNextLine(1))?
-                                .queue(Print("Exiting..."))?;
+                            print_message(&mut stdout, "exiting...")?;
                             break 'outer;
                         }
-                        let insertion_point = buffer.get_caret_pos() - input_start_col;
+                        let insertion_point = buffer.get_insertion_point();
                         stdout
                             .queue(Print(c))?
-                            .queue(Print(buffer.slice_buffer(insertion_point.into())))?
-                            .queue(MoveToColumn(buffer.get_caret_pos() + 1))?;
+                            .queue(Print(buffer.slice_buffer(insertion_point)))?
+                            .queue(MoveToColumn(insertion_point as u16 + input_start_col + 1))?;
                         stdout.flush()?;
-                        buffer.increment_caret_pos();
-                        buffer.insert_char(insertion_point.into(), c);
+                        buffer.increment_insertion_point();
+                        buffer.insert_char(insertion_point, c);
                     }
                     KeyCode::Backspace => {
-                        let insertion_point: usize =
-                            (buffer.get_caret_pos() - input_start_col).into();
+                        let insertion_point = buffer.get_insertion_point();
                         if insertion_point == buffer.get_buffer_length() && !buffer.is_empty() {
                             buffer.pop();
                             stdout
@@ -144,10 +139,12 @@ fn main() -> Result<()> {
                                 .queue(MoveLeft(1))?
                                 .queue(Print(buffer.slice_buffer(insertion_point - 1)))?
                                 .queue(Print(" "))?
-                                .queue(MoveToColumn(buffer.get_caret_pos() - 1))?;
+                                .queue(MoveToColumn(
+                                    buffer.get_insertion_point() as u16 + input_start_col - 1,
+                                ))?;
                         }
                         stdout.flush()?;
-                        buffer.decrement_caret_pos();
+                        buffer.decrement_insertion_point();
                     }
                     KeyCode::Enter => {
                         if buffer.get_buffer() == "exit" {
@@ -158,57 +155,52 @@ fn main() -> Result<()> {
                                 &format!("Buffer: {}", buffer.get_buffer()),
                             )?;
                             buffer.clear();
+                            buffer.set_insertion_point(0);
                             break 'input;
                         }
                     }
                     KeyCode::Left => {
-                        if buffer.get_caret_pos() > input_start_col {
+                        if buffer.get_insertion_point() > 0 {
                             if modifiers == KeyModifiers::ALT {
-                                let whitespace_index = buffer.calcuate_word_left(input_start_col);
+                                let whitespace_index = buffer.calcuate_word_left();
                                 match whitespace_index {
                                     Some((index, _)) => {
                                         stdout.queue(MoveToColumn(
                                             index as u16 + input_start_col + 1,
                                         ))?;
-                                        buffer.set_caret_pos(index as u16 + input_start_col + 1);
+                                        buffer.set_insertion_point(index + 1);
                                     }
                                     None => {
                                         stdout.queue(MoveToColumn(input_start_col))?;
-                                        buffer.set_caret_pos(input_start_col);
+                                        buffer.set_insertion_point(0);
                                     }
                                 }
                             } else {
                                 stdout.execute(MoveLeft(1))?;
-                                buffer.decrement_caret_pos();
+                                buffer.decrement_insertion_point();
                             }
                             stdout.flush()?;
                         }
                     }
                     KeyCode::Right => {
-                        if buffer.get_caret_pos()
-                            < input_start_col + buffer.get_buffer_length() as u16
-                        {
+                        if buffer.get_insertion_point() < buffer.get_buffer_length() {
                             if modifiers == KeyModifiers::ALT {
-                                let whitespace_index = buffer.calcuate_word_right(input_start_col);
+                                let whitespace_index = buffer.calcuate_word_right();
                                 match whitespace_index {
                                     Some((index, _)) => {
-                                        stdout.queue(MoveToColumn(
-                                            index as u16 + input_start_col + 1,
-                                        ))?;
-                                        buffer.set_caret_pos(index as u16 + input_start_col + 1);
+                                        stdout.queue(MoveToColumn(index as u16 + 1))?;
+                                        buffer.set_insertion_point(index + 1);
                                     }
                                     None => {
                                         stdout.queue(MoveToColumn(
-                                            buffer.get_buffer_length() as u16 + input_start_col,
+                                            buffer.get_buffer_length() as u16
                                         ))?;
-                                        buffer.set_caret_pos(
-                                            buffer.get_buffer_length() as u16 + input_start_col,
-                                        );
+                                        buffer.set_insertion_point(buffer.get_buffer_length());
                                     }
                                 }
                             } else {
                                 stdout.execute(MoveRight(1))?;
-                                buffer.increment_caret_pos();
+                                buffer.increment_insertion_point();
                             }
                             stdout.flush()?;
                         }
