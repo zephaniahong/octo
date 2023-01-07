@@ -1,119 +1,30 @@
 use crossterm::{
-    cursor::{position, MoveLeft, MoveRight, MoveToColumn, MoveToNextLine},
+    cursor::{position, MoveLeft, MoveRight, MoveToColumn},
     event::{read, Event, KeyCode, KeyEvent, KeyModifiers},
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal, ExecutableCommand, QueueableCommand, Result,
 };
 use std::io::{stdout, Stdout, Write};
+mod line_buffer;
+use line_buffer::LineBuffer;
 
-struct LineBuffer {
-    buffer: String,
-    insertion_point: usize,
-}
-
-impl LineBuffer {
-    pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-            insertion_point: 0,
-        }
-    }
-
-    pub fn set_insertion_point(&mut self, pos: usize) {
-        self.insertion_point = pos;
-    }
-
-    pub fn get_insertion_point(&self) -> usize {
-        self.insertion_point
-    }
-
-    pub fn get_buffer_length(&self) -> usize {
-        self.buffer.len()
-    }
-
-    pub fn get_buffer(&self) -> &str {
-        &self.buffer
-    }
-
-    pub fn slice_buffer(&self, pos: usize) -> &str {
-        &self.buffer[pos..]
-    }
-
-    pub fn increment_insertion_point(&mut self) {
-        self.insertion_point += 1;
-    }
-
-    pub fn decrement_insertion_point(&mut self) {
-        self.insertion_point = self.insertion_point.saturating_sub(1);
-    }
-
-    pub fn insert_char(&mut self, pos: usize, c: char) {
-        self.buffer.insert(pos, c);
-    }
-
-    pub fn remove_char(&mut self, pos: usize) {
-        self.buffer.remove(pos);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-
-    pub fn pop(&mut self) -> Option<char> {
-        self.buffer.pop()
-    }
-
-    pub fn move_word_left(&mut self) -> usize {
-        match self
-            .buffer
-            .rmatch_indices(&[' ', '\t'][..])
-            .find(|(index, _)| index < &(self.insertion_point - 1))
-        {
-            Some((index, _)) => {
-                self.insertion_point = index;
-                index
-            }
-            None => {
-                self.insertion_point = 0;
-                0
-            }
-        }
-    }
-
-    pub fn move_word_right(&mut self) -> usize {
-        match self
-            .buffer
-            .match_indices(&[' ', '\t'][..])
-            .find(|(index, _)| index > &self.insertion_point)
-        {
-            Some((index, _)) => {
-                self.insertion_point = index + 1;
-                index
-            }
-            None => {
-                self.insertion_point = self.get_buffer_length() - 1;
-                self.get_insertion_point()
-            }
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.buffer.clear();
-    }
-}
+#[macro_use]
+extern crate log;
 
 fn print_message(stdout: &mut Stdout, msg: &str) -> Result<()> {
     stdout
         .queue(Print("\n"))?
-        .queue(MoveToColumn(0))?
+        .queue(MoveToColumn(1))?
         .queue(Print(msg))?
         .queue(Print("\n"))?
-        .queue(MoveToColumn(0))?;
+        .queue(MoveToColumn(1))?;
     stdout.flush()?;
     Ok(())
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+    info!("Starting up!!!!");
     let mut stdout = stdout();
     let mut buffer = LineBuffer::new();
     terminal::enable_raw_mode()?;
@@ -125,7 +36,8 @@ fn main() -> Result<()> {
             .execute(Print("> "))?
             .execute(ResetColor)?;
 
-        let (prompt_offset, _) = position()?;
+        let (mut prompt_offset, _) = position()?;
+        prompt_offset += 1;
 
         'input: loop {
             match read()? {
@@ -138,17 +50,23 @@ fn main() -> Result<()> {
                             break 'outer;
                         }
                         let insertion_point = buffer.get_insertion_point();
-                        stdout
-                            .queue(Print(c))?
-                            .queue(Print(buffer.slice_buffer(insertion_point)))?
-                            .queue(MoveToColumn(insertion_point as u16 + prompt_offset + 1))?;
+                        if insertion_point == buffer.get_buffer_length() {
+                            stdout.queue(Print(c))?;
+                        } else {
+                            stdout
+                                .queue(Print(c))?
+                                .queue(Print(buffer.slice_buffer(insertion_point)))?
+                                .queue(MoveToColumn(insertion_point as u16 + prompt_offset + 1))?;
+                        }
                         stdout.flush()?;
-                        buffer.increment_insertion_point();
                         buffer.insert_char(insertion_point, c);
+                        buffer.increment_insertion_point();
                     }
+                    // TODO: Error when using alt to go to start and then backspace
                     KeyCode::Backspace => {
                         let insertion_point = buffer.get_insertion_point();
                         if insertion_point == buffer.get_buffer_length() && !buffer.is_empty() {
+                            buffer.decrement_insertion_point();
                             buffer.pop();
                             stdout
                                 .queue(MoveLeft(1))?
@@ -156,17 +74,18 @@ fn main() -> Result<()> {
                                 .queue(MoveLeft(1))?;
                         } else if insertion_point < buffer.get_buffer_length() && !buffer.is_empty()
                         {
-                            buffer.remove_char(insertion_point - 1);
+                            buffer.decrement_insertion_point();
+                            let insertion_point = buffer.get_insertion_point();
+                            buffer.remove_char(insertion_point);
                             stdout
                                 .queue(MoveLeft(1))?
-                                .queue(Print(buffer.slice_buffer(insertion_point - 1)))?
+                                .queue(Print(buffer.slice_buffer(insertion_point)))?
                                 .queue(Print(" "))?
                                 .queue(MoveToColumn(
-                                    buffer.get_insertion_point() as u16 + prompt_offset - 1,
+                                    buffer.get_insertion_point() as u16 + prompt_offset,
                                 ))?;
                         }
                         stdout.flush()?;
-                        buffer.decrement_insertion_point();
                     }
                     KeyCode::Enter => {
                         if buffer.get_buffer() == "exit" {
