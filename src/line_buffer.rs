@@ -33,10 +33,6 @@ impl LineBuffer {
         &self.buffer
     }
 
-    pub fn slice_buffer(&self, pos: usize) -> &str {
-        &self.buffer[pos..]
-    }
-
     pub fn increment_insertion_point(&mut self) {
         let grapheme_indices = self.get_grapheme_indices();
         for i in 0..grapheme_indices.len() {
@@ -45,7 +41,7 @@ impl LineBuffer {
                 return;
             }
         }
-        self.insertion_point = self.buffer.len();
+        self.insertion_point = self.get_buffer_length();
     }
 
     pub fn decrement_insertion_point(&mut self) {
@@ -79,8 +75,43 @@ impl LineBuffer {
     }
 
     pub fn pop(&mut self) -> Option<char> {
-        self.buffer.pop()
+        let result = self.buffer.pop();
+        self.insertion_point = self.get_buffer_length();
+        result
     }
+
+    pub fn clear_buffer(&mut self) {
+        self.buffer.clear();
+        self.insertion_point = 0;
+    }
+
+    pub fn clear_to_end(&mut self, pos: usize) {
+        self.buffer.truncate(pos);
+    }
+
+    // pub fn get_left_grapheme_index(&self) -> usize {
+    //     let grapheme_indices = self.get_grapheme_indices();
+    //     let mut prev = 0;
+    //     for (i, _) in grapheme_indices.iter() {
+    //         if i == &self.insertion_point {
+    //             return prev;
+    //         }
+    //         prev = *i;
+    //     }
+    //     prev
+    // }
+
+    // pub fn get_right_grapheme_index(&self) -> usize {
+    //     let grapheme_indices = self.get_grapheme_indices();
+    //     let mut prev = self.get_buffer_length();
+    //     for (i, _) in grapheme_indices.iter().rev() {
+    //         if i == &self.insertion_point {
+    //             return prev;
+    //         }
+    //         prev = *i;
+    //     }
+    //     prev
+    // }
 
     pub fn move_word_left(&mut self) -> usize {
         match self

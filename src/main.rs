@@ -1,8 +1,9 @@
 use crossterm::{
-    cursor::{position, MoveLeft, MoveRight, MoveToColumn},
+    cursor::{position, MoveToColumn, RestorePosition, SavePosition},
     event::{read, Event, KeyCode, KeyEvent, KeyModifiers},
     style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal, ExecutableCommand, QueueableCommand, Result,
+    terminal::{self, Clear},
+    ExecutableCommand, QueueableCommand, Result,
 };
 use std::io::{stdout, Stdout, Write};
 mod line_buffer;
@@ -14,10 +15,24 @@ extern crate log;
 fn print_message(stdout: &mut Stdout, msg: &str) -> Result<()> {
     stdout
         .queue(Print("\n"))?
-        .queue(MoveToColumn(1))?
+        .queue(MoveToColumn(0))?
         .queue(Print(msg))?
         .queue(Print("\n"))?
-        .queue(MoveToColumn(1))?;
+        .queue(MoveToColumn(0))?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn buffer_repaint(stdout: &mut Stdout, buffer: &LineBuffer, prompt_offset: u16) -> Result<()> {
+    let new_index = buffer.get_insertion_point();
+    let b = buffer.get_buffer();
+    stdout
+        .queue(MoveToColumn(prompt_offset))?
+        .queue(Print(&b[0..new_index]))?
+        .queue(SavePosition)?
+        .queue(Print(&b[new_index..]))?
+        .queue(Clear(terminal::ClearType::UntilNewLine))?
+        .queue(RestorePosition)?;
     stdout.flush()?;
     Ok(())
 }
@@ -36,56 +51,53 @@ fn main() -> Result<()> {
             .execute(Print("> "))?
             .execute(ResetColor)?;
 
-        let (mut prompt_offset, _) = position()?;
-        prompt_offset += 1;
+        let (prompt_offset, _) = position()?;
 
         'input: loop {
             match read()? {
                 Event::Key(KeyEvent {
+                    code,
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => match code {
+                    KeyCode::Char('c') | KeyCode::Char('d') => {
+                        print_message(&mut stdout, "exiting...")?;
+                        break 'outer;
+                    }
+                    KeyCode::Char('a') => {
+                        buffer.set_insertion_point(0);
+                        buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
+                    }
+                    KeyCode::Char('u') => {
+                        buffer.clear_buffer();
+                        buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
+                    }
+                    KeyCode::Char('k') => {
+                        buffer.clear_to_end(buffer.get_insertion_point());
+                        buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
+                    }
+                    _ => {}
+                },
+                Event::Key(KeyEvent {
                     code, modifiers, ..
                 }) => match code {
                     KeyCode::Char(c) => {
-                        if modifiers == KeyModifiers::CONTROL && (c == 'd' || c == 'c') {
-                            print_message(&mut stdout, "exiting...")?;
-                            break 'outer;
-                        }
-                        let insertion_point = buffer.get_insertion_point();
-                        if insertion_point == buffer.get_buffer_length() {
-                            stdout.queue(Print(c))?;
-                        } else {
-                            stdout
-                                .queue(Print(c))?
-                                .queue(Print(buffer.slice_buffer(insertion_point)))?
-                                .queue(MoveToColumn(insertion_point as u16 + prompt_offset + 1))?;
-                        }
-                        stdout.flush()?;
-                        buffer.insert_char(insertion_point, c);
+                        buffer.insert_char(buffer.get_insertion_point(), c);
                         buffer.increment_insertion_point();
+                        buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                     }
-                    // TODO: Error when using alt to go to start and then backspace
                     KeyCode::Backspace => {
                         let insertion_point = buffer.get_insertion_point();
                         if insertion_point == buffer.get_buffer_length() && !buffer.is_empty() {
                             buffer.decrement_insertion_point();
                             buffer.pop();
-                            stdout
-                                .queue(MoveLeft(1))?
-                                .queue(Print(" "))?
-                                .queue(MoveLeft(1))?;
+                            buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                         } else if insertion_point < buffer.get_buffer_length() && !buffer.is_empty()
                         {
                             buffer.decrement_insertion_point();
-                            let insertion_point = buffer.get_insertion_point();
-                            buffer.remove_char(insertion_point);
-                            stdout
-                                .queue(MoveLeft(1))?
-                                .queue(Print(buffer.slice_buffer(insertion_point)))?
-                                .queue(Print(" "))?
-                                .queue(MoveToColumn(
-                                    buffer.get_insertion_point() as u16 + prompt_offset,
-                                ))?;
+                            buffer.remove_char(buffer.get_insertion_point());
+                            buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                         }
-                        stdout.flush()?;
                     }
                     KeyCode::Enter => {
                         if buffer.get_buffer() == "exit" {
@@ -100,38 +112,38 @@ fn main() -> Result<()> {
                             break 'input;
                         }
                     }
+                    // TODO: History
+                    KeyCode::Up => {}
                     KeyCode::Left => {
                         if buffer.get_insertion_point() > 0 {
                             if modifiers == KeyModifiers::ALT {
-                                let new_insertion_point = buffer.move_word_left();
-                                stdout.queue(MoveToColumn(
-                                    new_insertion_point as u16 + prompt_offset,
-                                ))?;
+                                buffer.move_word_left();
+                                buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                             } else {
-                                stdout.execute(MoveLeft(1))?;
                                 buffer.decrement_insertion_point();
+                                buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                             }
-                            stdout.flush()?;
                         }
                     }
                     KeyCode::Right => {
                         if buffer.get_insertion_point() < buffer.get_buffer_length() {
                             if modifiers == KeyModifiers::ALT {
-                                let new_insertion_point = buffer.move_word_right();
-                                stdout.queue(MoveToColumn(
-                                    new_insertion_point as u16 + prompt_offset + 1,
-                                ))?;
+                                buffer.move_word_right();
+                                buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                             } else {
-                                stdout.execute(MoveRight(1))?;
                                 buffer.increment_insertion_point();
+                                buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                             }
-                            stdout.flush()?;
                         }
+                    }
+                    KeyCode::Home => {
+                        buffer.set_insertion_point(0);
+                        buffer_repaint(&mut stdout, &buffer, prompt_offset)?;
                     }
                     _ => {}
                 },
                 Event::Mouse(event) => {
-                    println!("Mouse event: {:?}", event);
+                    println!("Mouse event1: {:?}", event);
                 }
                 Event::FocusGained => todo!(),
                 Event::FocusLost => todo!(),
