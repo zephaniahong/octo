@@ -33,6 +33,10 @@ impl LineBuffer {
         &self.buffer
     }
 
+    pub fn move_to_end(&mut self) {
+        self.set_insertion_point(self.get_buffer_length());
+    }
+
     pub fn increment_insertion_point(&mut self) {
         let grapheme_indices = self.get_grapheme_indices();
         for i in 0..grapheme_indices.len() {
@@ -42,6 +46,10 @@ impl LineBuffer {
             }
         }
         self.insertion_point = self.get_buffer_length();
+    }
+
+    pub fn set_buffer(&mut self, buffer: String) {
+        self.buffer = buffer;
     }
 
     pub fn decrement_insertion_point(&mut self) {
@@ -64,6 +72,10 @@ impl LineBuffer {
 
     pub fn insert_char(&mut self, pos: usize, c: char) {
         self.buffer.insert(pos, c);
+    }
+
+    pub fn insert_string(&mut self, pos: usize, s: &str) {
+        self.buffer.insert_str(pos, s);
     }
 
     pub fn remove_char(&mut self, pos: usize) {
@@ -89,46 +101,21 @@ impl LineBuffer {
         self.buffer.truncate(pos);
     }
 
-    // pub fn get_left_grapheme_index(&self) -> usize {
-    //     let grapheme_indices = self.get_grapheme_indices();
-    //     let mut prev = 0;
-    //     for (i, _) in grapheme_indices.iter() {
-    //         if i == &self.insertion_point {
-    //             return prev;
-    //         }
-    //         prev = *i;
-    //     }
-    //     prev
-    // }
-
-    // pub fn get_right_grapheme_index(&self) -> usize {
-    //     let grapheme_indices = self.get_grapheme_indices();
-    //     let mut prev = self.get_buffer_length();
-    //     for (i, _) in grapheme_indices.iter().rev() {
-    //         if i == &self.insertion_point {
-    //             return prev;
-    //         }
-    //         prev = *i;
-    //     }
-    //     prev
-    // }
-
     pub fn move_word_left(&mut self) -> usize {
-        match self
-            .buffer
-            .rmatch_indices(&[' ', '\t'][..])
-            .find(|(index, _)| index < &(self.insertion_point - 1))
-        {
-            Some((index, _)) => {
-                self.insertion_point = index;
-            }
-            None => {
-                self.insertion_point = 0;
+        if self.get_insertion_point() > 0 {
+            match self
+                .buffer
+                .rmatch_indices(&[' ', '\t'][..])
+                .find(|(index, _)| index < &(self.insertion_point - 1))
+            {
+                Some((index, _)) => self.insertion_point = index,
+                None => self.insertion_point = 0,
             }
         }
         self.insertion_point
     }
 
+    // TODO: Should move to end of word rather than after white space
     pub fn move_word_right(&mut self) -> usize {
         match self
             .buffer
